@@ -632,7 +632,7 @@ if __name__ == '__main__':
         if args.local_rank <= 0:
             from pytorch_fid.fid_score import calculate_fid_given_paths
             # pip install pytorch-fid
-            kwargs = {'batch_size': 50, 'device': device, 'dims': 2048}
+            kwargs = {'batch_size': 50, 'device': args.gpu, 'dims': 2048}
             paths = [output_path, data_path]
             fid = calculate_fid_given_paths(paths=paths, **kwargs)
             print(f'FID score: {fid}')
