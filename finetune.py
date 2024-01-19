@@ -20,6 +20,10 @@ import random
 # os.environ["CUDA_VISIBLE_DEVICES"]="0"
 from model import Model
 from config import diffusion_config
+import wandb
+from swyoon_utils import mkdir_p
+from tqdm import trange
+
 
 def _map_gpu(gpu):
     if gpu == 'cuda':
@@ -423,6 +427,7 @@ def train_one_epoch(net, dataloader, optimizer, f, v, optimizer_fstar, optimizer
                     print('mean', output[:x_seq[-1].shape[0]].mean().item())
         # if (step+1) % 200 == 0:
             # save_image(make_grid(rescale(x_seq[-1])[:64]), fp=os.path.join('generated', '{}_test_image.jpg'.format(output_name)))
+        i_iter += 1
         
 
 
@@ -562,6 +567,10 @@ if __name__ == '__main__':
     # train
     if not os.path.exists("generated"):
         os.makedirs("generated")
+    if args.local_rank == 0:
+        wandb.init(project='gcd_cifar10', name='ying_original')
+    logdir = 'generated'
+    i_iter = 0
     for epoch in range(args.n_epochs):
         if args.local_rank == 0:
             if epoch > 0:
@@ -590,6 +599,44 @@ if __name__ == '__main__':
                 # save image at init
                 # save_image(make_grid(rescale(Xi)[:64]), fp=os.path.join('generated', '{}init.jpg'.format(output_name)))
             print('epoch', epoch)
+
+
+        # Computing FID Score
+        output_path = os.path.join(logdir, f'img_epoch_{epoch}')
+        mkdir_p(output_path)
+        data_path = os.path.join('data', f'cifar10_train_png')
+        if not os.path.exists(data_path):
+            print('dataset not found')
+            continue
+
+        print('generating images for FID evaluation')
+        net.eval()
+        n_sample_to_generate = 50000 / args.batchsize / ngpus
+        i_img = 0
+        for i in trange(int(n_sample_to_generate), ncols=80):
+            with torch.no_grad():
+                Xi, log_prob_list = VAR_sampling(net, (64, C, H, W),
+                                diffusion_hyperparams,
+                                user_defined_eta,
+                                kappa=generation_param["kappa"],
+                                continuous_steps=continuous_steps)
+                Xi = Xi[-1]
+
+            sample = ((Xi + 1) / 2).clamp(0,1).detach().cpu()
+            for s in sample:
+                save_image(s, os.path.join(output_path, f'{args.local_rank}_{i_img}.png'))
+                i_img += 1
+
+        torch.distributed.barrier()  # make sure all files are generated
+        print('calculating FID score')
+        if args.local_rank <= 0:
+            from pytorch_fid.fid_score import calculate_fid_given_paths
+            # pip install pytorch-fid
+            kwargs = {'batch_size': 50, 'device': device, 'dims': 2048}
+            paths = [output_path, data_path]
+            fid = calculate_fid_given_paths(paths=paths, **kwargs)
+            print(f'FID score: {fid}')
+            wandb.log({'FID_': fid}, step=i_iter)
 
         train_one_epoch(net=net, dataloader = train_loader, optimizer = optimizer, f = f, v = v, optimizer_fstar = optimizer_fstar, optimizer_v = optimizer_v, continuous_steps = continuous_steps, diffusion_hyperparams = diffusion_hyperparams, size = (args.batchsize, C, H, W), user_defined_eta=user_defined_eta, kappa = kappa, args = args, train = (epoch >-1), n_critic = args.n_critic, n_generator = args.n_generator)
         a = next(net.parameters())

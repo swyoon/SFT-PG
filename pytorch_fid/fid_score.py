@@ -261,6 +261,7 @@ def compute_statistics_of_path(path, model, batch_size, dims, device, resize=0):
         path = pathlib.Path(path)
         files = sorted([file for ext in IMAGE_EXTENSIONS
                        for file in path.glob('*.{}'.format(ext))])
+        print(f'Found {len(files)} files')
         m, s = calculate_activation_statistics(files, model, batch_size,
                                                dims, device, resize)
     return m, s
